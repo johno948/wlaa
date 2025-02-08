@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quiz App</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-database-compat.js"></script>
+    <style>
+        body {
+            background-color: #f8f9fa; /* Light background */
+            font-family: sans-serif;
+        }
+        .container {
+            margin-top: 50px;
+        }
+        .card {
+            border: none;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Subtle shadow */
+        }
+        .card-header {
+            background-color: #fff; /* White header */
+            border-bottom: none;
+            padding: 20px;
+            text-align: center; /* Center the title */
+        }
+        .card-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #343a40; /* Darker title color */
+        }
+        .card-body {
+            padding: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            font-weight: 500;
+            color: #555;
+        }
+        .btn-primary {
+            background-color: #007bff; /* Blue button */
+            border-color: #007bff;
+        }
+        .btn-primary:hover {
+            background-color: #0069d9;
+            border-color: #0062cc;
+        }
+        .timer-container {
+            text-align: right;
+            margin-bottom: 20px;
+        }
+        #timer {
+            font-size: 18px;
+            font-weight: 500;
+        }
+        .progress {
+            height: 5px;
+            border-radius: 6px;
+            margin-bottom: 20px; /* Space below progress bar */
+        }
+        .progress-bar {
+            background-color: #007bff; /* Blue progress bar */
+            border-radius: 6px;
+        }
+        .auth-buttons { /* Style for sign-up buttons */
+            display: flex;
+            flex-direction: column; /* Stack buttons vertically */
+            gap: 10px; /* Space between buttons */
+            margin-top: 20px;
+        }
+        .view { /* Style for the different views (login, signup, home, quiz) */
+            display: none; /* Initially hide all views */
+        }
+        .view.active {
+            display: block; /* Show the active view */
+        }
+        .spinner-border {
+            width: 3rem;
+            height: 3rem;
+        }
+        .navbar {
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <nav class="navbar navbar-expand-lg navbar-light bg-light">
+        <a class="navbar-brand" href="#">Quiz App</a>
+        <div class="collapse navbar-collapse">
+            <ul class="navbar-nav ml-auto">
+                <li class="nav-item">
+                    <button id="navbarLogoutButton" class="btn btn-primary">Logout</button>
+                </li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-body">
+
+                        <div id="loginView" class="view"></div>
+
+                        <div id="signupView" class="view"></div>
+
+                        <div id="homeView" class="view"></div>
+
+                        <div id="quizView" class="view"></div>
+
+                        <div id="loadingSpinner" class="text-center" style="display: none;">
+                            <div class="spinner-border" role="status">
+                                <span class="sr-only">Loading...</span>
+                            </div>
+                        </div>
+
+                        <div id="error-msg-wrap" style="display: none;">
+                            <p id="error-msg"></p>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Replace the existing Firebase config and initialization
+        const firebaseConfig = {
+            apiKey: "AIzaSyDyWtawXpiw0t9u0cxDvnm6IPZj0TpPLzc",
+            authDomain: "quizapp-a2816.firebaseapp.com",
+            databaseURL: "https://quizapp-a2816-default-rtdb.firebaseio.com",
+            projectId: "quizapp-a2816",
+            storageBucket: "quizapp-a2816.firebasestorage.app",
+            messagingSenderId: "974169811275",
+            appId: "1:974169811275:web:2a66305188d4bbef4220ce",
+            measurementId: "G-9XYWGL8T61"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+
+        // Initialize services
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const database = firebase.database();
+
+        // Add these after Firebase initialization
+        const userStatusRef = database.ref('user-status');
+        let startTime = null;
+
+        // Global variables
+        let timerInterval = null;  // Declare timerInterval outside the functions
+        let formSubmitted = false; // Flag to prevent multiple submissions
+
+        const loginView = document.getElementById('loginView');
+        const signupView = document.getElementById('signupView');
+        const homeView = document.getElementById('homeView');
+        const quizView = document.getElementById('quizView');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const errorMsgWrap = document.getElementById('error-msg-wrap');
+        const errorMsg = document.getElementById('error-msg');
+
+        const firebaseUrl = "https://quizapp-a2816-default-rtdb.firebaseio.com/";
+
+        let formDetails;
+        let registrationDetails;
+
+        function showView(viewId) {
+            // Hide all views
+            loginView.classList.remove('active');
+            signupView.classList.remove('active');
+            homeView.classList.remove('active');
+            quizView.classList.remove('active');
+            loadingSpinner.style.display = 'none';
+            errorMsgWrap.style.display = 'none';
+
+            // Show the selected view
+            document.getElementById(viewId).classList.add('active');
+
+            // Save the current view to localStorage
+            localStorage.setItem('currentView', viewId);
+        }
+
+        // Load Login View
+        loginView.innerHTML = `
+            <h3>Login</h3>
+            <form id="loginForm">
+                <div class="form-group">
+                    <label for="loginEmail">Email</label>
+                    <input type="email" id="loginEmail" class="form-control" placeholder="Email">
+                </div>
+                <div class="form-group">
+                    <label for="loginPassword">Password</label>
+                    <input type="password" id="loginPassword" class="form-control" placeholder="Password">
+                </div>
+                <button type="submit" class="btn btn-primary">Login</button>
+                <p>Don't have an account? <a href="#" id="showSignup">Sign Up</a></p>
+            </form>
+            <button id="googleLoginButton" class="btn btn-danger">Login with Google</button>
+        `;
+
+        // Add Login Form Submit Listener
+        document.getElementById('loginForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+
+            showLoadingSpinner();
+            auth.signInWithEmailAndPassword(email, password)
+                .then(() => {
+                    // Check if email is verified
+                    if (auth.currentUser.emailVerified) {
+                        // Success, handled by auth state change
+                    } else {
+                        hideLoadingSpinner();
+                        displayError("Please verify your email before logging in.");
+                        auth.signOut();
+                    }
+                })
+                .catch((error) => {
+                    hideLoadingSpinner();
+                    displayError(error.message);
+                });
+        });
+
+        // Add Google Login Listener
+        document.getElementById('googleLoginButton').addEventListener('click', () => {
+            const provider = new firebase.auth.GoogleAuthProvider();
+            showLoadingSpinner();
+            auth.signInWithPopup(provider)
+                .then(() => { /* Success, handled by auth state change */ })
+                .catch((error) => {
+                    hideLoadingSpinner();
+                    displayError(error.message);
+                });
+        });
+
+        // Add "Show Signup" click Listener
+        document.getElementById('showSignup').addEventListener('click', (e) => {
+            e.preventDefault();
+            showView('signupView');
+        });
+
+        // Load Signup View
+        signupView.innerHTML = `
+            <h3>Sign Up</h3>
+            <form id="signupForm">
+                <div class="form-group">
+                    <label for="signupName">Full Name</label>
+                    <input type="text" id="signupName" class="form-control" placeholder="Full Name">
+                </div>
+                <div class="form-group">
+                    <label for="signupEmail">Email</label>
+                    <input type="email" id="signupEmail" class="form-control" placeholder="Email">
+                </div>
+                <div class="form-group">
+                    <label for="signupPassword">Password</label>
+                    <input type="password" id="signupPassword" class="form-control" placeholder="Password">
+                </div>
+                <button type="submit" class="btn btn-primary">Sign Up</button>
+                <p>Already have an account? <a href="#" id="showLogin">Login</a></p>
+            </form>
+            <button id="googleSignupButton" class="btn btn-danger">Sign Up with Google</button>
+        `;
+
+        // Add Signup Form Submit Listener
+        document.getElementById('signupForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const name = document.getElementById('signupName').value;
+            const email = document.getElementById('signupEmail').value;
+            const password = document.getElementById('signupPassword').value;
+
+            showLoadingSpinner();
+            auth.createUserWithEmailAndPassword(email, password)
+                .then((userCredential) => {
+                    // Update the user's profile with the name
+                    return userCredential.user.updateProfile({
+                        displayName: name
+                    }).then(() => {
+                        // Send email verification
+                        return userCredential.user.sendEmailVerification({
+                            url: 'https://yourdomain.com/verify-email' // Custom URL for email verification
+                        });
+                    });
+                })
+                .then(() => {
+                    hideLoadingSpinner();
+                    displayError("Verification email sent. Please check your inbox.");
+                })
+                .catch((error) => {
+                    hideLoadingSpinner();
+                    displayError(error.message);
+                });
+        });
+
+        // Add Google Signup Listener
+        document.getElementById('googleSignupButton').addEventListener('click', () => {
+            const provider = new firebase.auth.GoogleAuthProvider();
+            showLoadingSpinner();
+            auth.signInWithPopup(provider)
+                .then(() => { /* Success, handled by auth state change */ })
+                .catch((error) => {
+                    hideLoadingSpinner();
+                    displayError(error.message);
+                });
+        });
+
+        // Add "Show Login" click Listener
+        document.getElementById('showLogin').addEventListener('click', (e) => {
+            e.preventDefault();
+            showView('loginView');
+        });
+
+        auth.onAuthStateChanged((user) => {
+            if (user) {
+                // Check if email is verified
+                if (!user.emailVerified) {
+                    auth.signOut();
+                    displayError("Please verify your email before logging in.");
+                    return;
+                }
+
+                // Check if the user has already taken the quiz
+                showLoadingSpinner();
+                db.collection('users').doc(user.uid).get().then((doc) => {
+                    const userData = doc.data();
+                    if (userData && userData.hasTakenQuiz) {
+                        // User has already taken the quiz
+                        showHomeView(user, true);
+                    } else {
+                        // User has not taken the quiz
+                        showHomeView(user, false);
+                    }
+                }).catch((error) => {
+                    hideLoadingSpinner();
+                    displayError(error.message);
+                });
+            } else {
+                // User is not signed in, show login view
+                showView('loginView');
+            }
+        });
+
+        function showHomeView(user, hasTakenQuiz) {
+            hideLoadingSpinner();
+            showView('homeView');
+            if (hasTakenQuiz) {
+                homeView.innerHTML = `
+                    <h3>Home</h3>
+                    <p>Welcome, ${user.displayName || 'User'}!</p>
+                    <p>You have already taken the quiz.</p>
+                    <button id="logoutButton" class="btn btn-primary">Logout</button>
+                `;
+            } else {
+                homeView.innerHTML = `
+                    <h3>Home</h3>
+                    <p>Welcome, ${user.displayName || 'User'}!</p>
+                    <button id="startQuizButton" class="btn btn-primary">Start Quiz</button>
+                    <button id="logoutButton" class="btn btn-primary">Logout</button>
+                `;
+
+                document.getElementById('startQuizButton').addEventListener('click', () => {
+                    showView('quizView');
+                    loadQuiz();
+                });
+            }
+            // Add Logout Listener
+            document.getElementById('logoutButton').addEventListener('click', () => {
+                auth.signOut().then(() => { /* Redirect handled by auth state change */ });
+            });
+        }
+
+        async function loadQuiz() {
+            try {
+                showLoadingSpinner();
+                const googleFormLink = "https://docs.google.com/forms/d/e/1FAIpQLSdFxt73bcWkx6upgXAqyeK1FfaXI1gwnOSQuXx34pJxa3EFaw/viewform?embedded=true";
+                
+                // Initialize form details for monitoring
+                formDetails = {
+                    formId: 'FAIpQLSdFxt73bcWkx6upgXAqyeK1FfaXI1gwnOSQuXx34pJxa3EFaw'
+                };
+                
+                registrationDetails = {
+                    formpushkey: formDetails.formId,
+                    formregnpushkey: auth.currentUser.uid
+                };
+
+                quizView.innerHTML = `
+                    <h3>Quiz</h3>
+                    <div class="timer-container">
+                        Time Remaining: <span id="timer">10:00</span>
+                    </div>
+                    <div class="progress">
+                        <div class="progress-bar" role="progressbar" style="width: 100%;" id="progressBar"></div>
+                    </div>
+                    <div id="iframe-container">
+                        <iframe id="quiz-iframe" src="${googleFormLink}" width="100%" height="600px" frameborder="0" marginheight="0" marginwidth="0">Loading…</iframe>
+                    </div>
+                    <button id="quizViewLogoutButton" class="btn btn-primary">Logout</button>
+                `;
+
+                // Start monitoring form submission
+                monitorFormSubmit(formDetails, registrationDetails);
+
+                // Start the timer and store the interval
+                timerInterval = startTimer(10 * 60, document.getElementById('timer'), document.getElementById('progressBar'));
+
+                // Start monitoring Google Form submit button
+                monitorGoogleFormSubmit();
+
+                document.getElementById('quizViewLogoutButton').addEventListener('click', () => {
+                    auth.signOut();
+                });
+
+                hideLoadingSpinner();
+            } catch (error) {
+                hideLoadingSpinner();
+                displayError("Error loading quiz: " + error.message);
+            }
+        }
+
+        function startTimer(duration, display, progressBar) {
+            let timer = duration, minutes, seconds;
+            const interval = setInterval(() => {
+                minutes = parseInt(timer / 60, 10);
+                seconds = parseInt(timer % 60, 10);
+
+                minutes = minutes < 10 ? "0" + minutes : minutes;
+                seconds = seconds < 10 ? "0" + seconds : seconds;
+
+                display.textContent = minutes + ":" + seconds;
+
+                const progress = (timer / duration) * 100;
+                progressBar.style.width = progress + "%";
+
+                if (--timer < 0) {
+                    clearInterval(interval);
+                    display.textContent = "00:00";
+                    progressBar.style.width = "0%";
+                    // Auto-submit the quiz when the timer runs out
+                    // Replace the line below with your actual form submission logic
+                    // alert("Time's up! Submitting the quiz...");
+                    // document.getElementById('quizForm').submit(); // If you have a form to submit
+                }
+            }, 1000);
+            return interval;
+        }
+
+        // Update the monitorFormSubmit function
+        function monitorFormSubmit(formDetails, registrationDetails) {
+            try {
+                console.log('Starting form monitoring...', registrationDetails);
+                const formLiveDataRef = database.ref(`form-live-data/${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}`);
+                const userRef = userStatusRef.child(`${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}/${auth.currentUser.uid}`);
+
+                // Set initial user status
+                userRef.set({
+                    connected: true,
+                    submitted: false,
+                    lastSeen: firebase.database.ServerValue.TIMESTAMP,
+                    startTime: firebase.database.ServerValue.TIMESTAMP
+                }).then(() => {  // Start timer *after* setting initial status
+                    startTimer(auth.currentUser.uid, registrationDetails);
+                }).catch(error => {
+                    console.error("Error setting initial user status:", error);
+                });
+
+                // Monitor form submission
+                formLiveDataRef.on('value', (snapshot) => {
+                    const liveData = snapshot.val();
+                    console.log('Form submission data:', liveData);
+
+                    if (liveData && liveData.submitted === 1 && !formSubmitted) {
+                        formSubmitted = true; // Set the flag *before* calling handleFormSubmit
+                        handleFormSubmit(auth.currentUser.uid, registrationDetails);
+                        formLiveDataRef.off(); // Stop listening for further changes
+                    }
+                });
+
+            } catch (error) {
+                console.error("Error in monitorFormSubmit:", error);
+                displayError("Error setting up form monitoring: " + error.message);
+            }
+        }
+
+        // Update the timer function
+        function startTimer(userId, registrationDetails) {
+            clearInterval(timerInterval); // Clear any existing timer
+
+            let timer = 10 * 60; // 10 minutes
+            const display = document.getElementById('timer');
+            const progressBar = document.getElementById('progressBar');
+            const userRef = userStatusRef.child(`${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}/${userId}`);
+
+            timerInterval = setInterval(() => {
+                userRef.once('value').then((snapshot) => {
+                    const userData = snapshot.val();
+                    if (userData && userData.submitted) {
+                        clearInterval(timerInterval);
+                        timerInterval = null; // Reset timerInterval
+                        return;
+                    }
+
+                    minutes = parseInt(timer / 60, 10);
+                    seconds = parseInt(timer % 60, 10);
+                    display.textContent = `${minutes < 10 ? '0' : ''}${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+                    progressBar.style.width = `${(timer / (10 * 60)) * 100}%`;
+
+                    if (--timer < 0) {
+                        clearInterval(timerInterval);
+                        timerInterval = null; // Reset timerInterval
+                        handleFormSubmit(userId, registrationDetails);
+                    }
+                }).catch(error => {
+                    console.error("Error getting user data for timer:", error);
+                });
+            }, 1000);
+        }
+
+        // Update the form submission handler
+        async function handleFormSubmit(userId, registrationDetails) {
+            try {
+                console.log('Handling form submission...');
+                const userRef = userStatusRef.child(`${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}/${userId}`);
+
+                // Update user status in Realtime Database *first*
+                await userRef.update({ submitted: true });
+
+                // Stop timer (safeguard)
+                if (timerInterval) {
+                    clearInterval(timerInterval);
+                    timerInterval = null;
+                    console.log('Timer stopped');
+                }
+
+                // Hide iframe
+                const iframe = document.getElementById('quiz-iframe');
+                if (iframe) {
+                    iframe.style.display = 'none';
+                    iframe.src = 'about:blank';
+                    console.log('Iframe hidden');
+                }
+
+                // Update UI
+                quizView.innerHTML = `
+                    <div class="text-center">
+                        <h3 class="mb-4">Quiz Completed</h3>
+                        <div class="alert alert-success">
+                            <p class="mb-0">Thank you for completing the quiz!</p>
+                            <p class="mb-0">Your submission has been recorded.</p>
+                        </div>
+                    </div>
+                `;
+
+                // Update Firestore status
+                const user = auth.currentUser;
+                if (user) {
+                    await db.collection('users').doc(user.uid).set({
+                        hasTakenQuiz: true,
+                        completedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    }, { merge: true });
+                }
+
+                // Auto redirect
+                setTimeout(() => {
+                    showHomeView(auth.currentUser, true);
+                }, 2000);
+
+            } catch (error) {
+                console.error("Error in handleFormSubmit:", error);
+                displayError("Error submitting form: " + error.message);
+            }
+        }
+
+        function displayError(message) {
+            hideLoadingSpinner();
+            errorMsg.innerText = message;
+            errorMsgWrap.style.display = "block";
+            errorMsg.style.color = "red"; // Set error message color to red
+        }
+
+        function showLoadingSpinner() {
+            loadingSpinner.style.display = "block";
+        }
+
+        function hideLoadingSpinner() {
+            loadingSpinner.style.display = "none";
+        }
+
+        // Update the monitorGoogleFormSubmit function
+        function monitorGoogleFormSubmit() {
+            try {
+                const iframe = document.getElementById('quiz-iframe');
+                if (!iframe) return;
+
+                // Wait for iframe to load
+                iframe.addEventListener('load', () => {
+                    try {
+                        console.log('Iframe loaded, setting up submit monitoring...');
+                        
+                        // Function to check for form submission
+                        function checkFormSubmission() {
+                            try {
+                                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                                
+                                // Check for confirmation page elements
+                                const confirmationText = iframeDoc.querySelector('.freebirdFormviewerViewResponseConfirmationMessage');
+                                const submitAnotherLink = iframeDoc.querySelector('a[jsname="A4LPb"]');
+                                
+                                if (confirmationText || submitAnotherLink) {
+                                    console.log('Form submission detected!');
+                                    handleFormSubmission();
+                                }
+                            } catch (error) {
+                                console.error('Error checking form submission:', error);
+                            }
+                        }
+
+                        // Handle successful form submission
+                        async function handleFormSubmission() {
+                            try {
+                                console.log('Handling form submission...');
+                                const formLiveDataRef = database.ref(`form-live-data/${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}`);
+                                await formLiveDataRef.update({ submitted: 1 });
+                            } catch (error) {
+                                console.error('Error updating submission status:', error);
+                            }
+                        }
+
+                        // Set up mutation observer to watch for form changes
+                        const observer = new MutationObserver((mutations) => {
+                            checkFormSubmission();
+                        });
+
+                        // Start observing once iframe is loaded
+                        iframe.addEventListener('load', () => {
+                            try {
+                                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                                observer.observe(iframeDoc.body, {
+                                    childList: true,
+                                    subtree: true,
+                                    attributes: true
+                                });
+                                console.log('Form observer started');
+                            } catch (error) {
+                                console.error('Error starting observer:', error);
+                            }
+                        });
+
+                        // Check periodically as backup
+                        const intervalCheck = setInterval(() => {
+                            if (formSubmitted) {
+                                clearInterval(intervalCheck);
+                                return;
+                            }
+                            checkFormSubmission();
+                        }, 1000);
+
+                    } catch (error) {
+                        console.error('Error in iframe load handler:', error);
+                    }
+                });
+
+            } catch (error) {
+                console.error('Error in monitorGoogleFormSubmit:', error);
+            }
+        }
+
+        // Add this to your existing setupFormSubmitListener
+        function setupFormSubmitListener() {
+            window.addEventListener('message', async (event) => {
+                // Verify the message origin is from Google Forms
+                if (event.origin.includes('google.com')) {
+                    try {
+                        console.log('Received message from Google Forms:', event.data);
+                        
+                        // Check for form submission indicators
+                        if (typeof event.data === 'string' && 
+                            (event.data.includes('SUBMISSION_RECEIVED') || 
+                             event.data.includes('formResponse'))) {
+                            console.log('Form submission detected via postMessage');
+                            const formLiveDataRef = database.ref(`form-live-data/${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}`);
+                            await formLiveDataRef.update({ submitted: 1 });
+                        }
+                    } catch (error) {
+                        console.error('Error processing form submission:', error);
+                    }
+                }
+            });
+        }
+
+        // Restore the last view from localStorage
+        document.addEventListener('DOMContentLoaded', () => {
+            const currentView = localStorage.getItem('currentView');
+            if (currentView) {
+                showView(currentView);
+            } else {
+                showView('loginView');
+            }
+            setupFormSubmitListener();
+        });
+    </script>
+
+</body>
+</html>
