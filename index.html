@@ -157,8 +157,8 @@
         let startTime = null;
 
         // Global variables
-        let timerInterval = null;  // Declare timerInterval outside the functions
-        let formSubmitted = false; // Flag to prevent multiple submissions
+        let timerInterval = null;
+        let formSubmitted = false;
 
         const loginView = document.getElementById('loginView');
         const signupView = document.getElementById('signupView');
@@ -413,9 +413,6 @@
                 // Start the timer and store the interval
                 timerInterval = startTimer(10 * 60, document.getElementById('timer'), document.getElementById('progressBar'));
 
-                // Start monitoring Google Form submit button
-                monitorGoogleFormSubmit();
-
                 document.getElementById('quizViewLogoutButton').addEventListener('click', () => {
                     auth.signOut();
                 });
@@ -454,35 +451,40 @@
             return interval;
         }
 
-        // Update the monitorFormSubmit function
+        // Update the monitorFormSubmit function to watch for database changes
         function monitorFormSubmit(formDetails, registrationDetails) {
             try {
                 console.log('Starting form monitoring...', registrationDetails);
-                const formLiveDataRef = database.ref(`form-live-data/${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}`);
                 const userRef = userStatusRef.child(`${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}/${auth.currentUser.uid}`);
+
+                // Set up a listener for the submitted status
+                userRef.on('value', (snapshot) => {
+                    const userData = snapshot.val();
+                    if (userData && userData.submitted === false) {
+                        console.log('Submission status changed to false, handling completion...');
+                        handleQuizCompletion();
+                        
+                        // Cleanup listener
+                        userRef.off('value');
+                    }
+                });
 
                 // Set initial user status
                 userRef.set({
                     connected: true,
-                    submitted: false,
+                    submitted: true, // Start with true
                     lastSeen: firebase.database.ServerValue.TIMESTAMP,
                     startTime: firebase.database.ServerValue.TIMESTAMP
-                }).then(() => {  // Start timer *after* setting initial status
+                }).then(() => {
                     startTimer(auth.currentUser.uid, registrationDetails);
                 }).catch(error => {
                     console.error("Error setting initial user status:", error);
                 });
 
-                // Monitor form submission
-                formLiveDataRef.on('value', (snapshot) => {
-                    const liveData = snapshot.val();
-                    console.log('Form submission data:', liveData);
-
-                    if (liveData && liveData.submitted === 1 && !formSubmitted) {
-                        formSubmitted = true; // Set the flag *before* calling handleFormSubmit
-                        handleFormSubmit(auth.currentUser.uid, registrationDetails);
-                        formLiveDataRef.off(); // Stop listening for further changes
-                    }
+                // Set up disconnect handler
+                userRef.onDisconnect().update({
+                    connected: false,
+                    lastSeen: firebase.database.ServerValue.TIMESTAMP
                 });
 
             } catch (error) {
@@ -491,65 +493,65 @@
             }
         }
 
-        // Update the timer function
-        function startTimer(userId, registrationDetails) {
-            clearInterval(timerInterval); // Clear any existing timer
-
-            let timer = 10 * 60; // 10 minutes
+        // Update startTimerWithStatus to watch for submitted status
+        function startTimerWithStatus(userRef) {
+            let timer = 10 * 60; // 10 minutes in seconds
             const display = document.getElementById('timer');
             const progressBar = document.getElementById('progressBar');
-            const userRef = userStatusRef.child(`${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}/${userId}`);
-
+            
             timerInterval = setInterval(() => {
                 userRef.once('value').then((snapshot) => {
                     const userData = snapshot.val();
-                    if (userData && userData.submitted) {
+                    if (userData && userData.submitted === false) {
                         clearInterval(timerInterval);
-                        timerInterval = null; // Reset timerInterval
+                        handleQuizCompletion();
                         return;
                     }
 
                     minutes = parseInt(timer / 60, 10);
                     seconds = parseInt(timer % 60, 10);
-                    display.textContent = `${minutes < 10 ? '0' : ''}${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
-                    progressBar.style.width = `${(timer / (10 * 60)) * 100}%`;
+
+                    minutes = minutes < 10 ? "0" + minutes : minutes;
+                    seconds = seconds < 10 ? "0" + seconds : seconds;
+
+                    display.textContent = minutes + ":" + seconds;
+                    
+                    const progress = (timer / (10 * 60)) * 100;
+                    progressBar.style.width = progress + "%";
 
                     if (--timer < 0) {
                         clearInterval(timerInterval);
-                        timerInterval = null; // Reset timerInterval
-                        handleFormSubmit(userId, registrationDetails);
+                        display.textContent = "00:00";
+                        progressBar.style.width = "0%";
+                        handleQuizCompletion();
+                        userRef.update({ submitted: false });
                     }
-                }).catch(error => {
-                    console.error("Error getting user data for timer:", error);
                 });
             }, 1000);
         }
 
-        // Update the form submission handler
-        async function handleFormSubmit(userId, registrationDetails) {
+        // Update handleQuizCompletion function
+        function handleQuizCompletion() {
             try {
-                console.log('Handling form submission...');
-                const userRef = userStatusRef.child(`${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}/${userId}`);
-
-                // Update user status in Realtime Database *first*
-                await userRef.update({ submitted: true });
-
-                // Stop timer (safeguard)
+                // Stop timer
                 if (timerInterval) {
                     clearInterval(timerInterval);
                     timerInterval = null;
-                    console.log('Timer stopped');
                 }
 
-                // Hide iframe
-                const iframe = document.getElementById('quiz-iframe');
-                if (iframe) {
-                    iframe.style.display = 'none';
-                    iframe.src = 'about:blank';
-                    console.log('Iframe hidden');
+                // Clean up iframe immediately
+                const iframeContainer = document.getElementById('iframe-container');
+                if (iframeContainer) {
+                    const iframe = document.getElementById('quiz-iframe');
+                    if (iframe) {
+                        iframe.style.display = 'none'; // Hide immediately
+                        iframe.src = 'about:blank';
+                        iframe.remove();
+                    }
+                    iframeContainer.innerHTML = '';
                 }
 
-                // Update UI
+                // Update view immediately
                 quizView.innerHTML = `
                     <div class="text-center">
                         <h3 class="mb-4">Quiz Completed</h3>
@@ -560,23 +562,46 @@
                     </div>
                 `;
 
-                // Update Firestore status
+                // Update user status
                 const user = auth.currentUser;
                 if (user) {
-                    await db.collection('users').doc(user.uid).set({
+                    db.collection('users').doc(user.uid).set({
                         hasTakenQuiz: true,
                         completedAt: firebase.firestore.FieldValue.serverTimestamp()
                     }, { merge: true });
                 }
 
-                // Auto redirect
+                // Auto redirect after 2 seconds
                 setTimeout(() => {
                     showHomeView(auth.currentUser, true);
                 }, 2000);
 
             } catch (error) {
+                console.error("Error in handleQuizCompletion:", error);
+                displayError("Error completing quiz: " + error.message);
+            }
+        }
+
+        // Update handleFormSubmit to change submitted to false
+        async function handleFormSubmit(userId, registrationDetails) {
+            try {
+                console.log('Handling form submission...');
+                const userRef = userStatusRef.child(`${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}/${userId}`);
+
+                // Update submission status to false to trigger completion
+                await userRef.update({ submitted: false });
+
+                // Stop timer
+                if (timerInterval) {
+                    clearInterval(timerInterval);
+                    timerInterval = null;
+                    console.log('Timer stopped');
+                }
+
+            } catch (error) {
                 console.error("Error in handleFormSubmit:", error);
                 displayError("Error submitting form: " + error.message);
+                formSubmitted = false; // Reset flag if there was an error
             }
         }
 
@@ -595,108 +620,6 @@
             loadingSpinner.style.display = "none";
         }
 
-        // Update the monitorGoogleFormSubmit function
-        function monitorGoogleFormSubmit() {
-            try {
-                const iframe = document.getElementById('quiz-iframe');
-                if (!iframe) return;
-
-                // Wait for iframe to load
-                iframe.addEventListener('load', () => {
-                    try {
-                        console.log('Iframe loaded, setting up submit monitoring...');
-                        
-                        // Function to check for form submission
-                        function checkFormSubmission() {
-                            try {
-                                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                                
-                                // Check for confirmation page elements
-                                const confirmationText = iframeDoc.querySelector('.freebirdFormviewerViewResponseConfirmationMessage');
-                                const submitAnotherLink = iframeDoc.querySelector('a[jsname="A4LPb"]');
-                                
-                                if (confirmationText || submitAnotherLink) {
-                                    console.log('Form submission detected!');
-                                    handleFormSubmission();
-                                }
-                            } catch (error) {
-                                console.error('Error checking form submission:', error);
-                            }
-                        }
-
-                        // Handle successful form submission
-                        async function handleFormSubmission() {
-                            try {
-                                console.log('Handling form submission...');
-                                const formLiveDataRef = database.ref(`form-live-data/${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}`);
-                                await formLiveDataRef.update({ submitted: 1 });
-                            } catch (error) {
-                                console.error('Error updating submission status:', error);
-                            }
-                        }
-
-                        // Set up mutation observer to watch for form changes
-                        const observer = new MutationObserver((mutations) => {
-                            checkFormSubmission();
-                        });
-
-                        // Start observing once iframe is loaded
-                        iframe.addEventListener('load', () => {
-                            try {
-                                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                                observer.observe(iframeDoc.body, {
-                                    childList: true,
-                                    subtree: true,
-                                    attributes: true
-                                });
-                                console.log('Form observer started');
-                            } catch (error) {
-                                console.error('Error starting observer:', error);
-                            }
-                        });
-
-                        // Check periodically as backup
-                        const intervalCheck = setInterval(() => {
-                            if (formSubmitted) {
-                                clearInterval(intervalCheck);
-                                return;
-                            }
-                            checkFormSubmission();
-                        }, 1000);
-
-                    } catch (error) {
-                        console.error('Error in iframe load handler:', error);
-                    }
-                });
-
-            } catch (error) {
-                console.error('Error in monitorGoogleFormSubmit:', error);
-            }
-        }
-
-        // Add this to your existing setupFormSubmitListener
-        function setupFormSubmitListener() {
-            window.addEventListener('message', async (event) => {
-                // Verify the message origin is from Google Forms
-                if (event.origin.includes('google.com')) {
-                    try {
-                        console.log('Received message from Google Forms:', event.data);
-                        
-                        // Check for form submission indicators
-                        if (typeof event.data === 'string' && 
-                            (event.data.includes('SUBMISSION_RECEIVED') || 
-                             event.data.includes('formResponse'))) {
-                            console.log('Form submission detected via postMessage');
-                            const formLiveDataRef = database.ref(`form-live-data/${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}`);
-                            await formLiveDataRef.update({ submitted: 1 });
-                        }
-                    } catch (error) {
-                        console.error('Error processing form submission:', error);
-                    }
-                }
-            });
-        }
-
         // Restore the last view from localStorage
         document.addEventListener('DOMContentLoaded', () => {
             const currentView = localStorage.getItem('currentView');
@@ -705,8 +628,102 @@
             } else {
                 showView('loginView');
             }
-            setupFormSubmitListener();
         });
+
+        // Add these functions after Firebase initialization
+        function getUserId() {
+            return auth.currentUser ? auth.currentUser.uid : null;
+        }
+
+        function monitorUserSubmission(formDetails, registrationDetails) {
+            const userId = getUserId();
+            if (!userId) {
+                console.error('No user ID available');
+                return;
+            }
+
+            const userSubmissionRef = database.ref(`user-status/${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}/${userId}/submitted`);
+
+            userSubmissionRef.on('value', (snapshot) => {
+                const submitted = snapshot.val();
+                console.log('Submission status:', submitted);
+
+                if (submitted === false) { // Check for false specifically
+                    // Stop timer and cleanup
+                    if (timerInterval) {
+                        clearInterval(timerInterval);
+                        timerInterval = null;
+                        console.log('Timer stopped due to submission');
+                    }
+
+                    // Hide iframe
+                    const iframe = document.getElementById('quiz-iframe');
+                    if (iframe) {
+                        iframe.style.display = 'none';
+                        setTimeout(() => {
+                            iframe.src = 'about:blank';
+                            iframe.remove();
+                        }, 100);
+                        console.log('Iframe hidden and removed');
+                    }
+
+                    // Show completion message
+                    handleQuizCompletion();
+
+                    // Cleanup listener
+                    userSubmissionRef.off('value');
+                }
+            });
+        }
+
+        // Update your existing monitorFormSubmit function
+        function monitorFormSubmit(formDetails, registrationDetails) {
+            try {
+                console.log('Starting form monitoring...', registrationDetails);
+                const userRef = userStatusRef.child(`${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}/${auth.currentUser.uid}`);
+
+                // Set initial user status
+                userRef.set({
+                    connected: true,
+                    submitted: true, // Start with true
+                    lastSeen: firebase.database.ServerValue.TIMESTAMP,
+                    startTime: firebase.database.ServerValue.TIMESTAMP
+                }).then(() => {
+                    // Start timer and submission monitoring
+                    startTimer(auth.currentUser.uid, registrationDetails);
+                    monitorUserSubmission(formDetails, registrationDetails);
+                }).catch(error => {
+                    console.error("Error setting initial user status:", error);
+                });
+
+                // Set up disconnect handler
+                userRef.onDisconnect().update({
+                    connected: false,
+                    lastSeen: firebase.database.ServerValue.TIMESTAMP
+                });
+
+            } catch (error) {
+                console.error("Error in monitorFormSubmit:", error);
+                displayError("Error setting up form monitoring: " + error.message);
+            }
+        }
+
+        // Update your handleFormSubmit function
+        async function handleFormSubmit(userId, registrationDetails) {
+            try {
+                console.log('Handling form submission...');
+                const userRef = userStatusRef.child(`${registrationDetails.formpushkey}/${registrationDetails.formregnpushkey}/${userId}`);
+
+                // Update submission status to false to trigger completion
+                await userRef.update({ submitted: false });
+                console.log('Updated submission status to false');
+
+            } catch (error) {
+                console.error("Error in handleFormSubmit:", error);
+                displayError("Error submitting form: " + error.message);
+                formSubmitted = false;
+            }
+        }
     </script>
 
 </body>
